@@ -1,0 +1,59 @@
+name: Deploy
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy para servidor
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+
+            APP_DIR="${{ secrets.APP_DIR }}"
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              echo "Diretório da aplicação não encontrado ou sem repositório git: $APP_DIR"
+              exit 1
+            fi
+
+            cd "$APP_DIR"
+            git fetch --all
+            git reset --hard origin/main
+
+            cd src
+
+            # Instala dependências PHP (vendor/)
+            docker run --rm \
+              -u "$(id -u):$(id -g)" \
+              -v "$PWD:/app" \
+              -w /app \
+              composer:2 \
+              composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
+
+            # Instala dependências Node e gera output.css do Tailwind
+            docker run --rm \
+              -u "$(id -u):$(id -g)" \
+              -v "$PWD:/app" \
+              -w /app \
+              node:20-alpine \
+              sh -lc "npm ci && npx @tailwindcss/cli -i ./input.css -o ./output.css"
+
+            cd ../infra
+            docker compose up -d
+
+            echo "Deploy finalizado com sucesso."
